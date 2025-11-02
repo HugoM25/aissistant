@@ -1,0 +1,60 @@
+# Stage 1: Builder - Installs dependencies and downloads tools
+
+# FIX: Use python:3.11-slim (Debian-based) for better binary compatibility
+FROM python:3.11-slim AS builder
+
+# Set environment variables
+ENV PIP_NO_CACHE_DIR=1
+ENV PYTHONUNBUFFERED 1
+ENV PYTHONDONTWRITEBYTECODE 1
+
+# Install essential system dependencies
+# 'espeak-ng' is the runtime speech engine required by Piper's phonemization layer.
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        curl \
+        espeak-ng \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set the working directory
+WORKDIR /app
+
+# Copy dependency file and install packages
+COPY requirements.txt .
+# This pip install should now succeed on the Debian base
+RUN pip install -r requirements.txt
+
+# --- Stage 2: Final Runtime Stage (Minimal size) ---
+
+# Start fresh with the clean, Debian slim image
+FROM python:3.11-slim
+
+# Install ONLY the necessary runtime dependencies
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        espeak-ng \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy installed Python packages from the builder stage
+# This transfers Piper, FastAPI, Uvicorn, and NumPy binaries/libraries
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy the application server script and the local model files
+COPY server.py .
+
+# Copy your local model files from the 'models/' folder (using specific French names)
+# NOTE: Ensure these files exist in your tts_service/models/ directory on the host!
+COPY fr_FR-siwis-medium.onnx .
+COPY fr_FR-siwis-medium.json .
+
+# Expose the API port
+EXPOSE 5001
+
+# Define the command to start the Uvicorn server
+# Using 'python -m uvicorn' bypasses PATH issues.
+CMD ["python", "-m", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "5001"]

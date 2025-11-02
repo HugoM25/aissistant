@@ -1,0 +1,44 @@
+FROM nvcr.io/nvidia/pytorch:23.10-py3 AS base
+
+# Install essential system dependencies (ffmpeg is necessary for audio processing)
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
+        ffmpeg \
+        curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python3 1
+
+RUN apt-get update && \
+    # 1. Download the CUDA repository package setup file
+    curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb -o cuda-keyring.deb && \
+    # 2. Install the repository keys
+    dpkg -i cuda-keyring.deb && \
+    # 3. Add the repository to apt sources
+    apt-get update
+
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    libcudnn9-cuda-12 \
+    && rm -rf /var/lib/apt/lists/*
+    
+# Set the working directory
+WORKDIR /app
+
+# Copy dependency file and install packages
+COPY requirements.txt .
+
+# Install faster-whisper and other Python packages
+# Since PyTorch is already installed, this step is cleaner.
+RUN pip install --no-cache-dir -r requirements.txt python-multipart
+
+# Copy the application server script
+COPY server.py .
+
+ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/cuda/targets/x86_64-linux/lib:$LD_LIBRARY_PATH"
+
+# Expose the API port
+EXPOSE 5000
+
+# Define the command to start the Uvicorn server
+CMD ["python", "-m", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "5000"]

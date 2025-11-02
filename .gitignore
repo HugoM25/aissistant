@@ -1,0 +1,80 @@
+# -------------------------------------------------------------
+# 1. PYTHON ENVIRONMENTS & ARTIFACTS
+# -------------------------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+env/
+venv/
+# IDE/Local Pip environments
+.python-version
+
+# --- Testing / Coverage ---
+.pytest_cache/
+htmlcov/
+.coverage
+
+# --- Packaging ---
+dist/
+build/
+*.egg-info/
+
+
+# -------------------------------------------------------------
+# 2. MACHINE LEARNING / MODEL CACHES
+# -------------------------------------------------------------
+# Hugging Face Model Cache (used by Whisper/Faster Whisper)
+# This prevents accidentally committing gigabytes of model files
+*/hf_cache/ 
+*/models_cache/
+
+# Ollama Cache and Data (Where GGUF files are stored if using volumes)
+*/.ollama/
+
+# Binary model files created during training/conversion
+*.gguf
+*.onnx
+*.onnx.json
+*.bin
+*.pth
+*.safetensors
+
+
+# -------------------------------------------------------------
+# 3. DOCKER & CONTAINER ARTIFACTS
+# -------------------------------------------------------------
+# Ignore Docker build and system files
+# Note: DO NOT ignore docker-compose.yml or Dockerfile.*
+.docker/
+.dockerignore
+
+# Temporary build contexts and volumes created by Docker/Compose
+# You should NOT commit volumes that hold runtime state (like DB data or logs)
+volumes/
+*.log
+tmp/
+temp/
+
+# -------------------------------------------------------------
+# 4. OS/IDE SPECIFIC FILES
+# -------------------------------------------------------------
+# Windows
+Thumbs.db
+
+# macOS
+.DS_Store
+
+# Virtual Machines / WSL
+.vagrant/
+.fuse_hidden*
+
+# VS Code
+.vscode/
+# PyCharm / IntelliJ
+.idea/
+
+
+.env
+.env.local

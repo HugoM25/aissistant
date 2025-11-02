@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+httpx
+langchain
+langgraph
+pydantic

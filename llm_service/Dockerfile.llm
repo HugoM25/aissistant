@@ -1,0 +1,25 @@
+# llm_service/Dockerfile.llm
+
+# --- Stage 1: Builder (Simplified to copy core assets) ---
+FROM ollama/ollama:latest AS builder
+
+# We still copy the files here, as the final stage needs them.
+# The GGUF file is large, but we need it in the image for the create command to work.
+COPY ./models_source/model.gguf /tmp/model.gguf
+COPY ./models_source/Modelfile /tmp/Modelfile
+COPY ./entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# --- Stage 2: Final Image ---
+FROM ollama/ollama:latest
+
+# Copy the assets (Model, Modelfile, and Entrypoint script) from the builder stage.
+# This makes the GGUF visible to the final container.
+COPY --from=builder /tmp/model.gguf /tmp/model.gguf
+COPY --from=builder /tmp/Modelfile /tmp/Modelfile
+COPY --from=builder /usr/local/bin/entrypoint.sh /usr/local/bin/entrypoint.sh
+
+# Set the entrypoint to our script, which executes the setup commands safely.
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# The script takes over, so no CMD is needed.

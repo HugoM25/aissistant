@@ -1,84 +1,157 @@
 # backend/src/main.py
 import os
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.responses import Response
+from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict
+from urllib.parse import quote
+
+
+from agent import Agent
 
 # --- Configuration ---
 # Read service URLs from environment variables set in docker-compose.yml
 LLM_URL = os.getenv("LLM_URL", "http://llm_service:11434")
+STT_URL = os.getenv("STT_URL", "http://stt_service:5000")
+TTS_URL = os.getenv("TTS_URL", "http://tts_service:5001")
 
 # --- FastAPI Setup ---
 app = FastAPI(title="LLM Connection Test Backend")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # Your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Transcribed-Text", "X-LLM-Response"],  # Expose custom headers
+)
 http_client = httpx.Client(timeout=120.0) # Using a synchronous client for simplicity
 
-SYSTEM_PROMPT = (
-    "You are a helpful AI assistant. Provide clear and concise answers. Like someone speaking "
-)
-
+SYSTEM_PROMPT = """
+You are a highly capable and helpful home assistant. Your primary goal is to fulfill user requests. Do not use emojis in your responses.
+"""
 
 # --- Core Functionality ---
-
-def get_llm_response(prompt: str) -> str:
-    """Calls the local Ollama service and returns the response."""
+@app.get("/health")
+def health_check():
+    """Health check endpoint to verify backend and service connectivity."""
+    status = {
+        "backend": "ok",
+        "llm_service": "unknown",
+        "stt_service": "unknown",
+        "tts_service": "unknown"
+    }
+    
+    # Check LLM ollama service
     try:
-        # 1. Define the API request payload
-        payload = {
-            "model": "my-custom-qwen", 
-            "prompt": prompt, 
-            "stream": False 
-        }
-        
-        # 2. Send the POST request to the Ollama container via the internal network URL
-        response = http_client.post(
-            f"{LLM_URL}/api/generate",
-            json=payload
-        )
-        response.raise_for_status() # Raise exception for 4xx or 5xx errors
-        
-        # 3. Parse the response and extract the generated text
-        return response.json().get("response", "ERROR: LLM returned empty response field.")
-        
-    except httpx.ConnectError:
-        return f"ERROR: Could not connect to LLM service at {LLM_URL}. Check Docker network/ports."
-    except httpx.HTTPStatusError as e:
-        return f"ERROR: LLM API returned status {e.response.status_code}. Response: {e.response.text}"
+        llm_response = http_client.get(f"{LLM_URL}/api/version")
+        if llm_response.status_code == 200:
+            status["llm_service"] = "ok"
     except Exception as e:
-        return f"An unexpected error occurred: {e}"
+        status["llm_service"] = f"error: {str(e)}"
 
-# --- API Endpoints ---
+    # Check STT service
+    try:
+        stt_response = http_client.get(f"{STT_URL}/")
+        status["stt_service"] = stt_response.json().get("status", "error")
+    except Exception as e:
+        status["stt_service"] = f"error: {str(e)}"
+    
+    # Check TTS service
+    try:
+        tts_response = http_client.get(f"{TTS_URL}/")
+        status["tts_service"] = tts_response.json().get("status", "error")
+    except Exception as e:
+        status["tts_service"] = f"error: {str(e)}"
+    
+    return status
 
-@app.get("/")
-def check_health() -> Dict[str, str]:
-    """Simple health check endpoint."""
-    return {"status": "Backend API running", "LLM_Target": LLM_URL}
+def get_transcription(client: httpx.Client, stt_url: str, audio_bytes: bytes, filename: str, content_type: str) -> str:
+    files = {
+        "audio_file": (filename or "recording.wav", audio_bytes, content_type or "audio/wav")
+    }
+    print(f"Sending audio to STT service: {stt_url}/transcribe")
+    resp = client.post(f"{stt_url}/transcribe", files=files)
+    print(f"STT Response status: {resp.status_code}")
+    print(f"STT Response: {resp.text}")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=500, detail=f"STT service failed: {resp.text}")
+    data = resp.json()
+    transcribed = data.get("result", "") or data.get("text", "")
+    if not transcribed:
+        raise HTTPException(status_code=400, detail="No text transcribed from audio")
+    return transcribed
 
-@app.get("/llm-test")
-def llm_test_endpoint() -> Dict[str, str]:
-    """Tests the full connection to the LLM service."""
-    
-    test_prompt = "Say 'Hello, LLM world!' and nothing else."
-    
-    # Get the response from the LLM container
-    llm_output = get_llm_response(test_prompt)
-    
-    # Check if the connection failed
-    if llm_output.startswith("ERROR"):
-        raise HTTPException(status_code=503, detail=llm_output)
-    
-    return {"prompt_sent": test_prompt, "llm_response": llm_output}
+def get_agent_answer(client: httpx.Client, llm_url: str, transcribed_text: str, model_name: str = "my-custom-qwen:latest") -> str:
+    payload = {
+        "model": model_name,
+        "prompt": f"{SYSTEM_PROMPT}\n\nUser: {transcribed_text}\n\nAssistant:",
+        "stream": False
+    }
+    print(f"Sending to LLM service: {llm_url}/api/generate")
+    resp = client.post(f"{llm_url}/api/generate", json=payload)
+    print(f"LLM Response status: {resp.status_code}")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=500, detail=f"LLM service failed: {resp.text}")
+    llm_text = resp.json().get("response", "") or resp.json().get("text", "")
+    if not llm_text:
+        raise HTTPException(status_code=500, detail="No response from LLM")
+    return llm_text
 
-@app.get("/llm-custom-test")
-def llm_custom_test_endpoint() -> Dict[str, str]:
-    """Tests the LLM service with a custom prompt."""
-    
-    custom_prompt = "Provide a brief summary of the benefits of using FastAPI for building APIs."
-    
-    # Get the response from the LLM container
-    llm_output = get_llm_response(custom_prompt)
-    
-    # Check if the connection failed
-    if llm_output.startswith("ERROR"):
-        raise HTTPException(status_code=503, detail=llm_output)
-    
-    return {"prompt_sent": custom_prompt, "llm_response": llm_output}
+def generate_voice(client: httpx.Client, tts_url: str, text: str, speaker_id: int = 0) -> bytes:
+    payload = {"text": text, "speaker_id": speaker_id}
+    print(f"Sending to TTS service: {tts_url}/synthesize")
+    resp = client.post(f"{tts_url}/synthesize", json=payload, headers={"Content-Type": "application/json"})
+    print(f"TTS Response status: {resp.status_code}")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=500, detail=f"TTS service failed: {resp.text}")
+    data = resp.json()
+    if data.get("status") == "success":
+        audio_hex = data.get("audio_bytes_hex")
+        if not audio_hex:
+            raise HTTPException(status_code=500, detail="TTS returned success but no audio_bytes_hex")
+        audio_bytes = bytes.fromhex(audio_hex)
+        print(f"Decoded audio size: {len(audio_bytes)} bytes")
+        return audio_bytes
+    else:
+        error_detail = data.get("detail", "Unknown TTS error")
+        raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {error_detail}")
+
+
+@app.post("/process-audio")
+async def process_audio(audio: UploadFile = File(...)):
+    """
+    Complete audio processing pipeline using extracted helpers:
+    1. Transcribe audio using STT service
+    2. Generate response using LLM service
+    3. Convert response to speech using TTS service
+    4. Return audio file
+    """
+    try:
+        audio_content = await audio.read()
+        transcribed_text = get_transcription(http_client, STT_URL, audio_content, audio.filename or "recording.wav", audio.content_type or "audio/wav")
+        print(f"Transcribed text: {transcribed_text}")
+
+        llm_text = get_agent_answer(http_client, LLM_URL, transcribed_text)
+        print(f"LLM Response: {llm_text}")
+
+        audio_bytes = generate_voice(http_client, TTS_URL, llm_text, speaker_id=0)
+
+        return Response(
+            content=audio_bytes,
+            media_type="audio/wav",
+            headers={
+                "Content-Disposition": "attachment; filename=response.wav",
+                "Content-Length": str(len(audio_bytes)),
+                "X-Transcribed-Text": quote(transcribed_text),
+                "X-LLM-Response": quote(llm_text)
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error processing audio: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")

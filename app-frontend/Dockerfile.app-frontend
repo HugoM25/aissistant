@@ -1,0 +1,26 @@
+# frontend/Dockerfile.frontend
+FROM node:22-alpine AS development
+
+# Set up the working directory inside the container
+WORKDIR /app
+
+# Copy package files first to leverage Docker caching
+COPY package*.json ./
+
+# Install dependencies
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+# Copy the rest of the application files
+COPY . .
+
+# Environment variable fix for Windows/WSL hot-reloading
+# Vite's file watcher struggles across bind mounts, so we enable polling.
+ENV CHOKIDAR_USEPOLLING=true
+ENV WATCHPACK_POLLING=true
+
+# Vite development port (default)
+EXPOSE 5173
+
+# Command to start the development server
+# The --host 0.0.0.0 is crucial to expose the server outside the container's localhost
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

@@ -1,55 +1,54 @@
 services:
-  # 1. THE BACKEND AGENT / ORCHESTRATOR
+  frontend:
+    build:
+      context: ./app-frontend
+      dockerfile: Dockerfile.app-frontend
+    container_name: app-frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./app-frontend:/app
+      - app_frontend_node_modules:/app/node_modules
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
+  # 1. THE BACKEND SERVER
   backend: 
     build: 
       context: ./app-backend
       dockerfile: Dockerfile.app-backend
     container_name: app-backend
-    
-    # --- FIX 1: Use Host Networking ---
-    network_mode: "host"
-    
-
+    ports:
+      - "8000:8000"
     environment:
-      # --- FIX 3: Use 127.0.0.1 for host network communication ---
-      - LLM_URL=http://127.0.0.1:11434
-      - STT_URL=http://127.0.0.1:5000
-      - TTS_URL=http://127.0.0.1:5001
-      
+      - LLM_URL=http://llm_service:11434
+      - STT_URL=http://stt_service:5000
+      - TTS_URL=http://tts_service:5001
     depends_on:
-      # Use the looser 'service_started' condition now that healthcheck is unstable
       llm_service:
         condition: service_started
       stt_service:
         condition: service_started
       tts_service:
         condition: service_started
-        
     volumes:
-      - ./app-backend/src:/app/src # Live development mount
-      
-# -----------------------------------------------------------------------------
-  
+      - ./app-backend/src:/app/src
+    restart: unless-stopped
+
   # 2. THE LLM SERVER (Ollama)
   llm_service:
     build:
       context: ./llm_service
-      dockerfile: Dockerfile.llm # Uses entrypoint.sh for model creation
+      dockerfile: Dockerfile.llm 
     container_name: llm_service
     runtime: nvidia 
-    
-    # --- FIX 1: Add Host Networking ---
-    network_mode: "host" 
     ports:
-      - "11434:11434" # Keep this for external access to Ollama API
-    
-    # Healthcheck is now unreliable due to host network/model creation race, but kept for monitoring
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-
+      - "11434:11434"
     deploy:
       resources:
         reservations:
@@ -57,8 +56,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu, compute, utility]
-              
-# -----------------------------------------------------------------------------
+    restart: unless-stopped
 
   # 3. STT SERVICE (Faster Whisper)
   stt_service:
@@ -67,8 +65,7 @@ services:
       dockerfile: Dockerfile.stt
     container_name: stt_service
     ports:
-      - "5000:5000" # Keep this for external access to STT service
-
+      - "5000:5000"
     runtime: nvidia
     shm_size: '2gb'
     ulimits:
@@ -76,11 +73,10 @@ services:
         soft: -1
         hard: -1
     volumes:
-      - ./stt_service/model_cache:/app/hf_cache # Local model cache mount
+      - ./stt_service/model_cache:/app/hf_cache
     environment:
       - WHISPER_MODEL=medium
-
-# -----------------------------------------------------------------------------
+    restart: unless-stopped
 
   # 4. TTS SERVICE (Piper)
   tts_service:
@@ -88,9 +84,11 @@ services:
       context: ./tts_service
       dockerfile: Dockerfile.tts
     container_name: tts_service
-    
     ports:
-      - "5001:5001" # Keep this for external access to TTS service
-    
+      - "5001:5001"
     volumes:
-      - ./tts_service:/app # Live development mount for server.py code
+      - ./tts_service:/app
+    restart: unless-stopped
+
+volumes:
+  app_frontend_node_modules:

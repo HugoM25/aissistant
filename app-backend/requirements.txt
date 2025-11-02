@@ -4,3 +4,7 @@ httpx
 langchain
 langgraph
 pydantic
+python-multipart
+langchain-core 
+langchain-community 
+langchain-ollama 
